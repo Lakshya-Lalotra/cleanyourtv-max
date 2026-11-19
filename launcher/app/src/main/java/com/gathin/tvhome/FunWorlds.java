@@ -40,6 +40,8 @@ final class FunWorlds {
                 MiddleEarthActivity.class));
         worlds.add(new World("One Piece", 0, "One Piece", "Grand Line", "Coming soon", 0xFF2E9BE6, null));
         worlds.add(new World("Narnia", 0, "The Chronicles", "of Narnia", "Coming soon", 0xFF7FC4E8, null));
+        worlds.add(new World("Add a space", 0, "Find or add", "a fun space", "Press OK to search and add spaces", 0xFFB0B0B0,
+                SpaceMarketActivity.class));
         return worlds;
     }
 
