@@ -21,6 +21,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
@@ -72,6 +73,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.dynamicanimation.animation.FloatPropertyCompat;
+import androidx.dynamicanimation.animation.DynamicAnimation;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -179,6 +181,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** config.xml glow_snap: the glow takes a new colour in one frame instead of the dip-and-fade. */
     private boolean glowSnap;
     private boolean heroShown;
+    /** app_taglines: the line above the dock instead of the app's name; taglineTurn steps on every return to Home. */
+    private Taglines taglines;
+    private int taglineTurn = -1;
+    /** home_keeps_focus: Home goes back to the tile last used instead of the first dock app. */
+    private boolean homeKeepsFocus;
+    /** weather: the temperature and air quality beside the clock; null when off. */
+    private Weather weather;
+    /** The weather widget beside the clock, focusable from the top bar, and the screen OK on it opens. */
+    private View weatherBlock;
+    private WeatherPanel weatherPanel;
+    /** side_wheel: the dial on the left edge, opened by Left on the first dock app; null when off. */
+    private SideWheel sideWheel;
+    /** fun_wheel: the Wheel of Fun on the right edge, opened by Right on the last dock app; null when off. */
+    private FunWheel funWheel;
+    /** The app fun_wheel was opened from, to give the focus back to. */
+    private int funFrom = -1;
+    /** search: where a film or series streams, opened by the top bar's magnifier; null when off. */
+    private SearchPanel searchPanel;
+    private TextView btnSearch;
+    /** Home's own Settings (Wi-Fi, Bluetooth, sound, apps, storage, about), from the Settings and Wi-Fi menus. */
+    private SettingsPanel settingsPanel;
+    /** The alphas fadeHomeLayer found before search hid Home's layer; null while it shows. */
+    private float[] homeLayerAlpha;
     private boolean animations;
     private boolean advancedEffects;
     private TextView greeting;
@@ -229,6 +254,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private Drawable.ConstantState vpnPlainBackground;
     private ColorStateList vpnPlainInk;
     private SpringAnimation springX, springY;
+    /** glow_style dock: the glow's own springs, which slide it under the focused tile (moveGlow), and their target. */
+    private SpringAnimation glowSpringX, glowSpringY;
+    private float glowTargetX, glowTargetY;
     private float glassTargetX, glassTargetY;
     // How far the grid has scrolled the glass. springY works without it, in grid content space, so a
     // scroll moves the glass in lockstep with its tile instead of becoming a moving spring target.
@@ -256,7 +284,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** config settings_key_keycodes / settings_key_panel, so the Settings button works on Home without HomeKeyService. */
     private int[] settingsKeycodes = new int[0];
     private boolean settingsKeyPanel;
-    private boolean settingsKeyClearTask;
     /** Calmer motion for weak GPUs (config.xml, reduced_motion): stiff spring, short fades, no replay. */
     private boolean reducedMotion;
     /** config.xml dock_row: the first row is a separate dock (band, parked low, top shelf) rather than plain grid. */
@@ -277,8 +304,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private static LocalDate lastPetalShower;
     /** boot_to_live_tv: open the Live TV app on the first Home of each boot. */
     private boolean bootToLiveTv;
-    /** The input in the Live TV tile's launch_actions ("input:<id>"), opened at power-on instead of the Live TV app. */
-    private String bootInputId;
     /** open_on_start_choice: the app picked in Launcher settings may open on the first Home of each boot. */
     private boolean openOnStartChoice;
     /** open_on_start_network_wait, in ms; the boot's app while it waits for the network, and until when. */
@@ -475,7 +500,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         applyViewInputsHandler(cfg.handleViewInputs);
         settingsKeycodes = cfg.settingsKeycodes;
         settingsKeyPanel = cfg.settingsKeyPanel;
-        settingsKeyClearTask = cfg.settingsKeyClearTask;
         COLUMNS = cfg.columns;
         animations = cfg.animations;
         advancedEffects = cfg.animations && cfg.advancedEffects;
@@ -490,7 +514,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         idleClockMs = cfg.homeIdleClockMinutes * MINUTE_MS;
         backOpensClock = cfg.backOpensClock;
         bootToLiveTv = cfg.bootToLiveTv;
-        bootInputId = LaunchActions.inputId(cfg.launchActions.get(cfg.liveTvPackage));
         openOnStartChoice = cfg.openOnStartChoice;
         openOnStartWaitMs = cfg.openOnStartNetworkWait * 1000L;
         openOnStartOnWake = OpenOnStart.onWake(cfg.openOnStartChoice, cfg.openOnStartOnWake);
@@ -543,6 +566,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // dock_title false: the name above the dock (and the cinematic lines under it) never shows; the glow
         // still follows the dock.
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
+        taglines = Taglines.parse(Arrays.asList(getResources().getStringArray(R.array.app_taglines)));
+        homeKeepsFocus = getResources().getBoolean(R.bool.home_keeps_focus);
         greeting = findViewById(R.id.greeting);
         clockBlock = findViewById(R.id.leftBlock);
         clockRefresh = new ClockRefresh(clockBlock);
@@ -552,6 +577,47 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!cfg.showGreeting && !cfg.dateBelowClock && !cfg.shamsiDate && !cfg.lunarDate
                 && !cfg.topMenu && !getResources().getBoolean(R.bool.rtl_menu_bar)) {
             centerCompactHeader();
+        }
+        if (!getResources().getBoolean(R.bool.show_date)) {
+            // show_date false: the clock alone, without the line and the date column after it.
+            findViewById(R.id.clockDivider).setVisibility(View.GONE);
+            ((View) findViewById(R.id.date).getParent()).setVisibility(View.GONE);
+        }
+        weatherBlock = findViewById(R.id.weather);
+        if (weatherBlock != null && getResources().getBoolean(R.bool.weather)) {
+            weather = new Weather(this, getString(R.string.latitude), getString(R.string.longitude));
+            weather.addListener(w -> bindHomeWeather());
+            weatherPanel = new WeatherPanel(this, root, weather, new WeatherPanel.Host() {
+                @Override
+                public void onWeatherShown(boolean shown, boolean animate) {
+                    fadeHomeLayer(!shown, animate);
+                }
+
+                @Override
+                public void onWeatherClosed() {
+                    if (weatherBlock.getVisibility() == View.VISIBLE) weatherBlock.requestFocus();
+                    else focusTile(lastFocused % COLUMNS);
+                }
+            });
+            // The widget is part of the top row: OK opens the weather screen, Right goes on to the top bar's first
+            // button, Down back to the dock app focus came up from.
+            weatherBlock.setOnClickListener(v -> weatherPanel.open());
+            weatherBlock.setOnKeyListener((v, key, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                switch (key) {
+                    case KeyEvent.KEYCODE_DPAD_RIGHT:
+                        firstTopBarButton().requestFocus();
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_DOWN:
+                        focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_UP:
+                    case KeyEvent.KEYCODE_DPAD_LEFT:
+                        return true;
+                    default:
+                        return false;
+                }
+            });
         }
         if (cfg.headerWhite) {
             // The clock's own white for the date and the line before it, instead of their dimmed whites.
@@ -676,8 +742,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
-        // Tiles that scroll out while reordering come back from the view cache without a rebind; set their
-        // dimming again whenever one attaches, so alpha matches the current mode.
+        // Tiles that scroll out while one is carried come back from the view cache without a rebind; set their
+        // dimming again whenever one attaches, so none stays dim after the drop.
         grid.addOnChildAttachStateChangeListener(new RecyclerView.OnChildAttachStateChangeListener() {
             @Override
             public void onChildViewAttachedToWindow(@NonNull View v) {
@@ -690,6 +756,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         });
         if (dockRow) grid.addItemDecoration(new DockDecoration(COLUMNS, density, cinematic, cfg.alwaysShowNames, cfg.dockOpacity, cfg.dockGlass, cfg.dockEvenPadding, cfg.dockBand,
                 singleRow, cfg.dockBandAll));
+        // section_gap: room above the first row under the dock, so the rest of the apps wait below the screen's edge.
+        int sectionGap = Math.round(getResources().getInteger(R.integer.section_gap) * density);
+        if (dockRow && !singleRow && sectionGap > 0) {
+            grid.addItemDecoration(new RecyclerView.ItemDecoration() {
+                @Override
+                public void getItemOffsets(@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent,
+                                           @NonNull RecyclerView.State state) {
+                    int pos = parent.getChildAdapterPosition(view);
+                    if (pos >= COLUMNS && pos < 2 * COLUMNS && !adapter.isLibraryAt(pos)) outRect.top = sectionGap;
+                }
+            });
+        }
         if (cfg.fadeRows) TopFade.attach(grid, 48 * density);
         // Reduced motion: the tiles are simply there, with no entrance (reloadApps skips it there too).
         if (animations && !reducedMotion) {
@@ -755,6 +833,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                // glow_style dock: the glow rides along with its tile, like the glass below.
+                if (glowSpringX != null && (dx != 0 || dy != 0)) moveGlow(glowTargetX - dx, glowTargetY - dy);
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 glassScrollShift -= dy;
@@ -767,6 +847,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 }
             }
         });
+        setUpBackdropShades();
 
         // game_day: the panel above the dock rides up with the cards instead of being covered by them, and fades
         // out by the time it reaches the clock. The grid's own offset is read, so a jump (Home, a restored focus)
@@ -780,6 +861,37 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                     racePanel.setTranslationY(-shift);
                     int room = Math.max(1, racePanel.getTop() - clockBlock.getBottom());
                     racePanel.setAlpha(Math.max(0f, 1f - shift / (float) room));
+                }
+            });
+        }
+
+        if (getResources().getBoolean(R.bool.side_wheel) && dockRow && !singleRow) {
+            sideWheel = new SideWheel(this, root, getString(R.string.wheel_country), () -> focusTile(0));
+        }
+        if (getResources().getBoolean(R.bool.fun_wheel) && dockRow && !singleRow) {
+            funWheel = new FunWheel(this, root, new FunWheel.Host() {
+                @Override
+                public void onFunShown(boolean shown, boolean animate) {
+                    fadeHomeLayer(!shown, animate);
+                }
+
+                @Override
+                public void onFunClosed() {
+                    // Back to the app the wheel was opened from, on whichever row.
+                    focusTile(funFrom >= 0 && funFrom < adapter.getItemCount() ? funFrom : adapter.dockFilled() - 1);
+                }
+
+                @Override
+                public boolean onOpenWorld(FunWorlds.World world) {
+                    try {
+                        // A fresh screen each time, even if an old one still waits behind JioHotstar.
+                        startActivity(new Intent(MainActivity.this, world.screen)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+                        overridePendingTransition(0, 0);
+                        return true;
+                    } catch (RuntimeException e) {
+                        return false;
+                    }
                 }
             });
         }
@@ -819,10 +931,46 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
 
+        btnSearch = findViewById(R.id.btnSearch);
+        if (btnSearch != null && getResources().getBoolean(R.bool.search)) {
+            searchPanel = new SearchPanel(this, root, getString(R.string.wheel_country), new SearchPanel.Host() {
+                @Override
+                public void onSearchShown(boolean shown, boolean animate) {
+                    fadeHomeLayer(!shown, animate);
+                }
+
+                @Override
+                public void onSearchClosed() {
+                    btnSearch.requestFocus();
+                }
+            });
+            btnSearch.setVisibility(View.VISIBLE);
+            btnSearch.setOnClickListener(v -> searchPanel.open());
+        }
+        settingsPanel = new SettingsPanel(this, root, new SettingsPanel.Host() {
+            @Override
+            public void onSettingsShown(boolean shown, boolean animate) {
+                fadeHomeLayer(!shown, animate);
+            }
+
+            @Override
+            public void onSettingsClosed() {
+                findViewById(R.id.btnSettings).requestFocus();
+            }
+
+            @Override
+            public void openLauncherSettings() {
+                startActivityForResult(new Intent(MainActivity.this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
+            }
+        });
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
         btnInputs.setOnClickListener(v -> showInputs());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
+        btnWifi.setOnClickListener(v -> {
+            // vpn_app: the pill opens the VPN app as before; otherwise its own dropdown, like Inputs.
+            if (!vpnPill && vpnAppIntent() != null) openNetworkPill();
+            else showWifiMenu();
+        });
         btnVpn.setOnClickListener(v -> openVpnPill());
         btnWifi.setOnLongClickListener(v -> {
             open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
@@ -836,7 +984,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnSettings.setOnClickListener(v -> {
             if (launcherSettingsButton) startActivityForResult(
                     new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
-            else open(systemIntent(Settings.ACTION_SETTINGS));
+            else showSettingsDropdown();
         });
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
@@ -884,6 +1032,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (cfg.wifiLabelWidth > 0) btnWifi.setMaxWidth(Math.round(cfg.wifiLabelWidth * density));
             else makeIconOnly(btnWifi);
             makeIconOnly((TextView) btnSettings);
+            if (btnSearch != null) makeIconOnly(btnSearch);
         }
         if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
         iconOnlyVpn = vpnPill && cfg.iconOnlyVpn;
@@ -908,12 +1057,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 focusTile(singleRow ? lastFocused : lastFocused % COLUMNS);
                 return true;
             }
-            int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
+            int firstButton = firstTopBarButton().getId();
             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT && v.getId() == leftButton && !rtlMenuBar
+                    && weatherBlock != null && weatherBlock.getVisibility() == View.VISIBLE) {
+                // Left from the first button goes on to the weather beside the clock: the same row.
+                weatherBlock.requestFocus();
+                return true;
+            }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
+        if (btnSearch != null) btnSearch.setOnKeyListener(pillKeys);
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnVpn.setOnKeyListener(pillKeys);
@@ -932,9 +1088,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
 
-        // Hide the glass when focus leaves the tiles.
-        // Taken off in onDestroy: recreate() keeps the window, and a listener left on it held every earlier Home.
-        getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener(glassFocusListener);
+        // Hide the glass when focus leaves the tiles; on the top bar the dock app's title and glow go too, so nothing
+        // on screen says an app is still selected. Coming back down to a tile shows them again (onTileFocused).
+        View topButtons = findViewById(R.id.topButtons);
+        getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
+            boolean onTile = newF != null && newF.getId() == R.id.card;
+            if (!onTile) hideGlass();
+            if (isInside(newF, topButtons) || newF != null && newF == weatherBlock) hideHero();
+        });
 
         packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED);
         packageFilter.addAction(Intent.ACTION_PACKAGE_REMOVED);
@@ -956,10 +1117,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
 
-        // From the application, not this activity: on Android 12 a ConnectivityManager keeps the context it was
-        // made with (its static sInstance, and the callback Messenger the system holds), so every recreate() left
-        // the previous Home and its bitmaps behind.
-        ConnectivityManager cm = getApplicationContext().getSystemService(ConnectivityManager.class);
+        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.registerCallback(inputCallback, handler);
         if (cm != null) {
@@ -1059,7 +1217,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openLibraryIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
+        // Settings stays open across a trip to one of Android's pages; the Home button closes it.
+        if (settingsPanel != null) settingsPanel.closeNow();
+        if (funWheel != null) funWheel.closeForHome();
         if (gameDay != null && !stopped) gameDay.read();
+        if (homeKeepsFocus && adapter.positionOf(lastFocusedKey) >= 0) {
+            // home_keeps_focus: back on the tile last used. Stopped, onResume puts focus back on lastFocusedKey.
+            int pos = adapter.positionOf(lastFocusedKey);
+            lastFocused = pos;
+            if (pos < COLUMNS) grid.scrollToPosition(0);
+            if (stopped) tileRefresh.onHomeAgain();
+            else grid.post(() -> focusTile(pos));
+            return;
+        }
         grid.scrollToPosition(0);
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
@@ -1077,6 +1247,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onStart();
         stopped = false;
         started = true;
+        taglineTurn++;   // app_taglines: the next line each time Home comes back
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -1104,6 +1275,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return;
         }
         restartIdleClock();
+        if (funWheel != null) funWheel.onHomeResumed();
         promptsPaused = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         switch (tileRefresh.onResume(packagesChangedSinceRebuild())) {
@@ -1140,6 +1312,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (gameDay != null) gameDay.start();
         sky.update();
         wallpaperPlayer.start();
+        if (weather != null) weather.start();
+        if (settingsPanel != null) settingsPanel.refresh();   // back from Android's page: what it changed shows
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && lamp != null) {
             lamp.start();
@@ -1314,6 +1488,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
+        if (weather != null) weather.stop();
+        if (sideWheel != null) sideWheel.closeNow();
+        if (funWheel != null) funWheel.closeNow();
+        if (searchPanel != null) searchPanel.closeNow();
+        if (weatherPanel != null) weatherPanel.closeNow();
         stopAmbientAnimation();
         hero.animate().cancel();
         ambient.animate().cancel();
@@ -1377,24 +1556,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
-    /** Hides the glass when focus leaves the tiles (added in onCreate, removed in onDestroy). */
-    private final ViewTreeObserver.OnGlobalFocusChangeListener glassFocusListener = (oldF, newF) -> {
-        boolean onTile = newF != null && newF.getId() == R.id.card;
-        if (!onTile) hideGlass();
-    };
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        ViewTreeObserver tree = getWindow().getDecorView().getViewTreeObserver();
-        if (tree.isAlive()) tree.removeOnGlobalFocusChangeListener(glassFocusListener);
         RemoteKeys.release(this);
         cancelHoldOk();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
         wallpaperPlayer.close();
-        ConnectivityManager cm = getApplicationContext().getSystemService(ConnectivityManager.class);   // as registered
+        if (weather != null) weather.close();
+        if (sideWheel != null) sideWheel.shutdown();
+        if (searchPanel != null) searchPanel.shutdown();
+        if (weatherPanel != null) weatherPanel.shutdown();
+        if (settingsPanel != null) settingsPanel.shutdown();
+        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
         if (cm != null) {
@@ -1413,11 +1589,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         for (int code : settingsKeycodes) {
             if (event.getKeyCode() != code) continue;
             if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
-                Intent settings = settingsKeyPanel ? new Intent(this, QuickSettingsActivity.class)
-                        : systemIntent(Settings.ACTION_SETTINGS);
-                // settings_key_clear_task, as in HomeKeyService: Back from Settings goes Home, not to a vendor page.
-                if (settingsKeyClearTask && !settingsKeyPanel) settings.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
-                open(settings);
+                open(settingsKeyPanel ? new Intent(this, QuickSettingsActivity.class)
+                        : systemIntent(Settings.ACTION_SETTINGS));
             }
             return true;
         }
@@ -1438,8 +1611,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        // A real key, not onUserInteraction: that also runs when the firmware starts Live TV over Home at power-on.
-        if (event.getAction() == KeyEvent.ACTION_DOWN) HomeKeyService.keyOnHome();
         if (homeIgnoreChannelKeys && RemoteKeys.isChannelKey(event.getKeyCode())) return true;
         // Vendor keys (TCL Netflix button, 4062) never reach the key services, only the focused window, so their
         // "hold:" entries run here too or nowhere. Only while resumed: onPause releases Home's holds, and a DOWN
@@ -1653,7 +1824,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dimOthers();
     }
 
-    /** Applies tileAlpha to every attached tile (carried tile bright; the rest dim while reordering). */
+    /** While a tile is carried, every other tile is dimmed so the carried one stands out; otherwise all are full. */
     private void dimOthers() {
         for (int i = 0; i < grid.getChildCount(); i++) {
             View item = grid.getChildAt(i);
@@ -1661,13 +1832,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
-    /** A tile's alpha: the carried tile stays bright; every other tile is dim while reordering, including after a
-     * drop, until Back ends the mode. In edit-dock mode, dock tiles other than the chosen place are dimmed. */
+    /** A tile's alpha: dim unless it is the carried one, or, in edit-dock mode, a dock tile other than the chosen place. */
     private float tileAlpha(int pos) {
         if (movingKey != null) {
             return pos != RecyclerView.NO_POSITION && movingKey.equals(adapter.keyAt(pos)) ? 1f : 0.45f;
         }
-        return GridNavigation.idleAlpha(pos, COLUMNS, dockEditing, dockEditSlot, reordering);
+        if (dockEditSlot >= 0 && pos >= 0 && pos < COLUMNS && pos != dockEditSlot) return 0.45f;
+        return 1f;
     }
 
     /** Ends the mode and saves the order if it changed since the mode started. */
@@ -1678,7 +1849,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         dockEditAppKey = null;
         drop();
         reordering = false;
-        dimOthers();   // drop() ran while reordering was still on; restore full brightness now the mode is off
         adapter.setReordering(false);
         glass.setAccent(festive ? festival.accentColor() : 0);
         btnReorder.setActivated(false);
@@ -1818,6 +1988,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onTileFocused(int position, View card) {
         lastFocused = position;
         lastFocusedKey = adapter.keyAt(position);
+        if (funWheel != null) funWheel.onTileFocused(position, adapter.dockFilled() - 1);
         // Focus restored before the first layout (cold start): the tile has no size yet, and the glass
         // would be sized to 2*pad. Run again once the tile is laid out.
         if (card.getWidth() == 0) {
@@ -1830,6 +2001,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Rect r = tileRect;
         r.set(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
+        // arc_rows draws a tile away from its cell by a translation, which the layout rect leaves out.
+        View cell = (View) card.getParent();
+        r.offset(Math.round(cell.getTranslationX()), Math.round(cell.getTranslationY()));
+        // glow_style dock: under this tile; a scroll that follows carries it along (the grid's scroll listener).
+        if (Config.GLOW_DOCK.equals(glowStyle)) moveGlow(r.exactCenterX() - root.getWidth() / 2f, r.exactCenterY() - root.getHeight() / 2f);
         float pad = 6f * density;        // matches GlassView's glow inset
         float scale = adapter.focusScale();
         float w = card.getWidth() * scale + 2 * pad;
@@ -1849,6 +2025,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         glassCardW = card.getWidth();
         glassCardRect.set(r);
+        // app_logos: a bare logo floats without a slab behind it; the glass still springs along, out of sight.
+        glass.setVisibility(adapter.isLogoAt(position) ? View.INVISIBLE : View.VISIBLE);
         glassTargetX = x;
         glassTargetY = y;
         // Cinematic shelf: the highlight glows in the dock app's colour, plain white in the grid (and on the dock with
@@ -1891,13 +2069,56 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             showHero(position, scroll ? r.top - dy : r.top);
         } else {
-            // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
-            // fade out left the grid on plain black.
-            showGlowOnly(position);
             // Scroll just enough so the whole glass (not only the tile) is visible.
             revealRect.set(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
+            if (adapter.arcRows()) {
+                // arc_rows: the section under the dock gets the big name too, above its row's raised middle, where
+                // the row lands once the scroll below has brought it on screen.
+                float rowTop = r.top - item.getTranslationY() - sectionScroll(item, revealRect)
+                        - getResources().getInteger(R.integer.arc_height) * density;
+                showHero(position, rowTop);
+            } else {
+                // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
+                // fade out left the grid on plain black.
+                showGlowOnly(position);
+            }
             grid.requestChildRectangleOnScreen(item, revealRect, reducedMotion);
         }
+    }
+
+    /**
+     * glow_style dock: slides the glow (drawn centred in its full-screen view) by this much from the middle of the
+     * screen. It jumps there while the glow is hidden and glides there on its own springs otherwise.
+     */
+    private void moveGlow(float tx, float ty) {
+        if (!ambientGlow || root.getWidth() == 0) return;
+        glowTargetX = tx;
+        glowTargetY = ty;
+        if (glowSpringX == null) {
+            glowSpringX = new SpringAnimation(ambient, DynamicAnimation.TRANSLATION_X, tx);
+            glowSpringY = new SpringAnimation(ambient, DynamicAnimation.TRANSLATION_Y, ty);
+            for (SpringAnimation s : new SpringAnimation[]{glowSpringX, glowSpringY}) {
+                s.getSpring().setStiffness(SpringForce.STIFFNESS_LOW).setDampingRatio(SpringForce.DAMPING_RATIO_NO_BOUNCY);
+            }
+        }
+        if (ambient.getAlpha() == 0f || !animations || reducedMotion) {
+            glowSpringX.cancel();
+            glowSpringY.cancel();
+            ambient.setTranslationX(tx);
+            ambient.setTranslationY(ty);
+        } else {
+            glowSpringX.animateToFinalPosition(tx);
+            glowSpringY.animateToFinalPosition(ty);
+        }
+    }
+
+    /** The scroll requestChildRectangleOnScreen is about to make for a grid tile, by the layout manager's own rule. */
+    private int sectionScroll(View item, Rect rect) {
+        int top = item.getTop() + rect.top;
+        int bottom = top + rect.height();
+        if (top < 0) return top;
+        if (bottom <= grid.getHeight()) return 0;
+        return Math.min(top, bottom - (grid.getHeight() - grid.getPaddingBottom()));
     }
 
     /** Refits the glass to the focused holder once the grid layout and tile dimensions settle. */
@@ -1916,6 +2137,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Rect r = tileRect;
         r.set(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
+        View cell = (View) card.getParent();   // arc_rows' translation, as onTileFocused adds it
+        r.offset(Math.round(cell.getTranslationX()), Math.round(cell.getTranslationY()));
         if (!glassShown || card.getWidth() != glassCardW || glass.getWidth() != w || glass.getHeight() != h
                 || !glassCardRect.equals(r)) {
             onTileFocused(pos, card);
@@ -1925,7 +2148,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
-        String label = adapter.labelAt(position);
+        String label = heroText(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
@@ -1990,6 +2213,96 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 ambient.animate().alpha(1f).setDuration(600).start();
             }
         }
+    }
+
+    /**
+     * bottom_shade and scroll_dim, over the wallpaper and under the glow: a black gradient up from the bottom edge for
+     * the dock to sit on, and plain black that thickens as the grid scrolls down, up to scroll_dim percent a screen
+     * down. Both are single-colour views, so neither draws through an offscreen buffer.
+     */
+    private void setUpBackdropShades() {
+        View bottomShade = findViewById(R.id.bottomShade);
+        int bottom = getResources().getInteger(R.integer.bottom_shade);
+        if (bottomShade != null && bottom > 0) {
+            bottomShade.getBackground().mutate().setAlpha(Math.min(100, bottom) * 255 / 100);
+            bottomShade.setVisibility(View.VISIBLE);
+        }
+        View dim = findViewById(R.id.scrollDim);
+        float most = Math.min(90, getResources().getInteger(R.integer.scroll_dim)) / 100f;
+        if (dim == null || most <= 0f || singleRow) return;
+        dim.setVisibility(View.VISIBLE);
+        grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                int shift = rv.canScrollVertically(-1) ? rv.computeVerticalScrollOffset() : 0;
+                float screen = Math.max(1, root.getHeight() * 0.6f);
+                dim.setAlpha(most * Math.min(1f, shift / screen));
+            }
+        });
+    }
+
+    /** The weather widget from the last answer: hidden until there is one, or when it is three hours old. */
+    private void bindHomeWeather() {
+        if (weather == null || weatherBlock == null) return;
+        if (!weather.hasReading()) {
+            if (weatherBlock.hasFocus()) firstTopBarButton().requestFocus();
+            weatherBlock.setVisibility(View.GONE);
+            return;
+        }
+        TextView place = findViewById(R.id.weatherPlace);
+        place.setText(weather.place());
+        place.setVisibility(weather.place().isEmpty() ? View.GONE : View.VISIBLE);
+        ((ImageView) findViewById(R.id.weatherIcon)).setImageResource(Weather.iconFor(Weather.kind(weather.code, weather.day)));
+        ((TextView) findViewById(R.id.weatherTemp)).setText(weather.temperature(weather.temp));
+        View dot = findViewById(R.id.weatherAqiDot);
+        TextView aqi = findViewById(R.id.weatherAqi);
+        if (weather.aqi >= 0) {
+            dot.getBackground().mutate().setTint(Weather.aqiColor(weather.aqi));
+            dot.setVisibility(View.VISIBLE);
+            aqi.setText("AQI " + weather.aqi);
+            aqi.setVisibility(View.VISIBLE);
+        } else {
+            dot.setVisibility(View.GONE);
+            aqi.setVisibility(View.GONE);
+        }
+        weatherBlock.setContentDescription(getString(R.string.weather) + ", " + weather.temperature(weather.temp)
+                + (weather.aqi >= 0 ? ", AQI " + weather.aqi : ""));
+        weatherBlock.setVisibility(View.VISIBLE);
+    }
+
+    /** The top bar's first button: Search when it is on, else Inputs, else the first visible one. */
+    private View firstTopBarButton() {
+        if (searchPanel != null && btnSearch.getVisibility() == View.VISIBLE) return btnSearch;
+        return btnInputs.getVisibility() == View.VISIBLE ? btnInputs : firstTopButton();
+    }
+
+    /**
+     * search: Home's own clock, buttons, tiles, title and glow fade out under the search and come back after it, so
+     * only the wallpaper stays behind the results. Each view returns to the alpha it had (the title may be hidden).
+     */
+    private void fadeHomeLayer(boolean visible, boolean animate) {
+        View content = (View) findViewById(R.id.leftBlock).getParent().getParent();
+        // Faded is not gone: while an overlay is up the tiles, the top bar and the weather take no focus at all, or a
+        // focus Android hands out when the overlay rebuilds a list lands on a dock tile and moves along the dock.
+        ((ViewGroup) content).setDescendantFocusability(visible
+                ? ViewGroup.FOCUS_AFTER_DESCENDANTS : ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+        View[] layer = {content, hero, ambient, glass};
+        if (!visible) homeLayerAlpha = new float[]{content.getAlpha(), hero.getAlpha(), ambient.getAlpha(), glass.getAlpha()};
+        for (int i = 0; i < layer.length; i++) {
+            float to = visible ? (homeLayerAlpha == null ? 1f : homeLayerAlpha[i]) : 0f;
+            layer[i].animate().cancel();
+            if (animate && animations && !reducedMotion) layer[i].animate().alpha(to).setDuration(200).start();
+            else layer[i].setAlpha(to);
+        }
+        if (visible) homeLayerAlpha = null;
+        // fun_wheel's tab belongs to Home: another overlay covers it, its own open wheel stays.
+        if (funWheel != null && !funWheel.isOpen()) funWheel.showTab(visible);
+    }
+
+    /** The line above the dock: this turn's app_taglines entry for the app, or else its name. */
+    private String heroText(int position) {
+        String line = taglines.pick(adapter.packageAt(position), taglineTurn);
+        return line != null ? line : adapter.labelAt(position);
     }
 
     /** The shelf's text for this dock app: its name and, on the cinematic shelf, "Last opened" and the dots. */
@@ -2162,6 +2475,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                         new int[]{0x40FFFFFF, 0x00FFFFFF},
                         null,
                         Shader.TileMode.CLAMP));
+            } else if (Config.GLOW_DOCK.equals(glowStyle)) {
+                // A soft ellipse of colour, a circle squashed to 42 % of its height, in the middle of the view:
+                // moveGlow slides the whole view so it sits behind the focused tile, wherever that is.
+                RadialGradient ellipse = new RadialGradient(
+                        w * 0.5f, h * 0.5f, w * 0.30f,
+                        new int[]{0x99FFFFFF, 0x38FFFFFF, 0x00FFFFFF},
+                        new float[]{0f, 0.5f, 1f},
+                        Shader.TileMode.CLAMP);
+                Matrix squash = new Matrix();
+                squash.setScale(1f, 0.42f, w * 0.5f, h * 0.5f);
+                ellipse.setLocalMatrix(squash);
+                paint.setShader(ellipse);
             } else {
                 paint.setShader(new RadialGradient(
                         w * 0.32f, h * 0.42f, w * 0.62f,
@@ -2251,6 +2576,27 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ambient.setAlpha(0f);
             heroArt.setAlpha(0f);
         }
+    }
+
+    /**
+     * Up from the dock always lands on Settings, the top bar's last button, whichever app it leaves: the focus finder
+     * picked the nearest button by position, so the same key landed on Wi-Fi from one app and Search from another.
+     * Without a Settings button on screen, the focus finder decides as before (false).
+     */
+    private boolean focusTopBarFromDock() {
+        View settings = findViewById(R.id.btnSettings);
+        if (settings == null || settings.getVisibility() != View.VISIBLE || !settings.requestFocus()) return false;
+        if (funWheel != null) funWheel.onFocusLeftDock();
+        grid.playSoundEffect(SoundEffectConstants.NAVIGATION_UP);
+        return true;
+    }
+
+    /** The view is the group or one of its descendants. */
+    private static boolean isInside(View view, View group) {
+        for (View v = view; v != null; v = v.getParent() instanceof View ? (View) v.getParent() : null) {
+            if (v == group) return true;
+        }
+        return false;
     }
 
     private void hideGlass() {
@@ -2461,6 +2807,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Horizontal: swallow the key at a row's ends so focus never wraps to the next row or
         // escapes up into the top bar. Mid-row moves fall through to the default focus search.
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            // side_wheel: Left on the first dock app pulls the wheel out of the left edge.
+            if (sideWheel != null && !rtlAppGrid && keyCode == KeyEvent.KEYCODE_DPAD_LEFT && position == 0) {
+                sideWheel.open();
+                return true;
+            }
+            // fun_wheel: Right on the last dock app pulls the Wheel of Fun out of the right edge.
+            if (funWheel != null && !rtlAppGrid && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                    && position == adapter.dockFilled() - 1) {
+                funFrom = position;
+                funWheel.open();
+                return true;
+            }
             boolean forward = rtlAppGrid ? keyCode == KeyEvent.KEYCODE_DPAD_LEFT : keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
             if (forward && position == adapter.focusablePosition(count - 1) && adapter.isLibraryAt(count)) {
                 focusLibrary();
@@ -2468,11 +2826,33 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             // In the dock, the last app is the row's end: the empty slots after it take no focus.
             int rowCount = position < COLUMNS ? Math.min(count, adapter.dockFilled()) : count;
+            // The same from the last app of any row below the dock: the wheel is at the right edge of them all.
+            int rowEnd = Math.min(rowCount, (position / COLUMNS + 1) * COLUMNS) - 1;
+            if (funWheel != null && !rtlAppGrid && keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && position == rowEnd) {
+                funFrom = position;
+                funWheel.open();
+                return true;
+            }
             return GridNavigation.atHorizontalEdge(position, rowCount, COLUMNS,
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
         }
+        if (adapter.arcRows() && !rtlAppGrid) {
+            // arc_rows: one row up or down, to the tile drawn nearest the same place across the screen.
+            int row = position / COLUMNS;
+            boolean up = keyCode == KeyEvent.KEYCODE_DPAD_UP;
+            if (up && row == 0) return focusTopBarFromDock();
+            int nextRow = up ? row - 1 : row + 1;
+            if (nextRow * COLUMNS >= count) {
+                if (adapter.isLibraryAt(count)) focusLibrary();
+                return true;
+            }
+            target = ArcRow.nearestInRow(nextRow, ArcRow.visualColumn(position, count, COLUMNS), count, COLUMNS);
+            focusTile(target);
+            grid.playSoundEffect(up ? SoundEffectConstants.NAVIGATION_UP : SoundEffectConstants.NAVIGATION_DOWN);
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
+            if (position < COLUMNS) return focusTopBarFromDock();
             target = position - COLUMNS;
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
@@ -2618,10 +2998,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             button.setCompoundDrawableTintList(null);
             button.setContentDescription(label);
             Intent target = launch;
-            // An input: action switches the TV input, as the tile for the same app does.
-            String inputId = LaunchActions.inputId(launchActions.get(pkg));
-            if (inputId != null) button.setOnClickListener(v -> openInput(inputId));
-            else button.setOnClickListener(v -> open(new Intent(target)));
+            button.setOnClickListener(v -> open(new Intent(target)));
             // After the network pill and the VPN pill; the Hebrew bar runs the other way, so before both there.
             bar.addView(button, bar.indexOfChild(getResources().getBoolean(R.bool.rtl_menu_bar) ? btnVpn : btnWifi));
             topAppButtons.add(button);
@@ -2760,7 +3137,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             else if (hour < 21) res = R.string.good_afternoon;
             else res = R.string.good_night;
         } else if ("da".equals(lang)) {
-            // Danish day parts: "Godmorgen" until 11, then "God formiddag" to noon.
+            // Danish day parts: "God morgen" until 11, then "God formiddag" to noon.
             if (hour < 5) res = R.string.good_night;
             else if (hour < 11) res = R.string.good_morning;
             else if (hour < 12) res = R.string.good_forenoon;
@@ -2950,7 +3327,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         int flame = 0;
         boolean steady = false;
         try {
-            ConnectivityManager cm = getApplicationContext().getSystemService(ConnectivityManager.class);
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             boolean wifi = false, ethernet = false;
             // All networks, not just the active one: with a VPN up the active network is the VPN itself.
             for (Network net : cm != null ? cm.getAllNetworks() : new Network[0]) {
@@ -3254,10 +3631,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         String target = bootToLiveTv ? liveTvPkg : app;
         if (!OpenOnStart.due(boot, prefs.getInt(OpenOnStart.BOOT_KEY, -1), target, getPackageName())) return false;
         if (!prefs.edit().putInt(OpenOnStart.BOOT_KEY, boot).commit()) return false;
-        if (bootToLiveTv && bootInputId != null) {
-            openInput(bootInputId);
-            return true;
-        }
         Intent i = bootToLiveTv ? liveTvIntent() : OpenOnStart.intent(getPackageManager(), app);
         if (i == null) return false;
         return openWhenReady(i);
@@ -3716,6 +4089,127 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         popup.setWidth(Math.max((int) (220 * density), Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
         dropIn(popup, panel, anchor, getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END);
         rows.getChildAt(0).requestFocus();
+    }
+
+    /**
+     * The Wi-Fi pill's dropdown, the Inputs list's twin: the network and whether it reaches the internet, Bluetooth and
+     * its paired devices, and the ad-blocking DNS, each a row that opens Android's settings for it, and Network settings.
+     */
+    private void showWifiMenu() {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (280 * density));
+        // Every row opens Home's own Settings on its page; the popup closes first, so focus can go there.
+        Runnable network = () -> root.post(() -> settingsPanel.open(SettingsPanel.WIFI));
+        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        android.net.Network active = cm != null ? cm.getActiveNetwork() : null;
+        NetworkCapabilities caps = active != null ? cm.getNetworkCapabilities(active) : null;
+        boolean wifi = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+        boolean wired = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
+        boolean online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        WifiInfo info = null;
+        if (wifi) {
+            WifiManager wm = getApplicationContext().getSystemService(WifiManager.class);
+            info = wm != null ? wm.getConnectionInfo() : null;
+        }
+        String name = wired ? getString(R.string.quick_network) : getString(R.string.wifi);
+        if (info != null && info.getSSID() != null && !"<unknown ssid>".equals(info.getSSID())) {
+            name = info.getSSID().replaceAll("^\"|\"$", "");
+        }
+        String state = online ? getString(R.string.connected) : caps != null ? "No internet" : "Not connected";
+        addStatusRow(rows, popup, wired ? R.drawable.ic_ethernet : R.drawable.ic_wifi, name, state, online, network);
+        addStatusRow(rows, popup, R.drawable.ic_bluetooth, "Bluetooth", bluetoothState(), bluetoothOn(),
+                () -> root.post(() -> settingsPanel.open(SettingsPanel.BLUETOOTH)));
+        String dnsMode = Settings.Global.getString(getContentResolver(), "private_dns_mode");
+        String dnsHost = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
+        boolean blocking = "hostname".equals(dnsMode) && dnsHost != null && !dnsHost.isEmpty();
+        addStatusRow(rows, popup, blocking ? R.drawable.ic_lock : R.drawable.ic_lock_open, "Ad blocking",
+                blocking ? (dnsHost.contains("adguard") ? "On  ·  AdGuard" : "On") : "Off", blocking, network);
+        addSeparator(rows);
+        addStatusRow(rows, popup, R.drawable.ic_settings, "Network settings", "", false, network);
+        dropIn(popup, panel, btnWifi, getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END);
+        rows.getChildAt(0).requestFocus();
+    }
+
+    /**
+     * The Settings pill's dropdown, matching Inputs and Wi-Fi: Home's own Settings, Android's picture page, the
+     * weather's place and unit (as in the weather screen), and Launcher settings. Hold OK on the pill still opens the
+     * home actions menu.
+     */
+    private void showSettingsDropdown() {
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (280 * density));
+        // Home's own Settings first; Display stays one press away, as Android's picture page has no stand-in.
+        addStatusRow(rows, popup, R.drawable.ic_settings, getString(R.string.settings), "Wi-Fi, sound, apps…", false,
+                () -> root.post(() -> settingsPanel.open(SettingsPanel.WIFI)));
+        addStatusRow(rows, popup, R.drawable.ic_picture, getString(R.string.quick_picture), "", false,
+                () -> open(SystemSettings.displayIntent(this)));
+        if (weather != null && weatherPanel != null) {
+            addSeparator(rows);
+            String place = weather.place();
+            addStatusRow(rows, popup, R.drawable.ic_wx_partly, "Weather location", place.isEmpty() ? "Default" : place,
+                    false, weatherPanel::openFinder);
+            // Switches in place: the menu stays open and the row shows the new unit.
+            View unit = addStatusRow(rows, popup, R.drawable.ic_wx_sun, "Temperature", unitName(), false, null);
+            unit.setOnClickListener(v -> {
+                weather.setFahrenheit(!weather.fahrenheit());
+                ((TextView) v.findViewById(R.id.status)).setText(unitName());
+            });
+        }
+        addSeparator(rows);
+        addStatusRow(rows, popup, R.drawable.ic_home_settings, getString(R.string.launcher_settings), "", false,
+                () -> startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max((int) (280 * density), Math.min(panel.getMeasuredWidth(), (int) (380 * density))));
+        dropIn(popup, panel, findViewById(R.id.btnSettings), getResources().getBoolean(R.bool.rtl_menu_bar)
+                ? Gravity.START : Gravity.END);
+        rows.getChildAt(0).requestFocus();
+    }
+
+    /** Bluetooth's switch; false when the TV has no radio or Android will not say. */
+    @SuppressWarnings("MissingPermission")
+    private boolean bluetoothOn() {
+        try {
+            android.bluetooth.BluetoothManager bm = getSystemService(android.bluetooth.BluetoothManager.class);
+            android.bluetooth.BluetoothAdapter adapter = bm != null ? bm.getAdapter() : null;
+            return adapter != null && adapter.isEnabled();
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    /** "On  ·  2 paired", "On", "Off", or "Not available" without a radio. */
+    @SuppressWarnings("MissingPermission")
+    private String bluetoothState() {
+        try {
+            android.bluetooth.BluetoothManager bm = getSystemService(android.bluetooth.BluetoothManager.class);
+            android.bluetooth.BluetoothAdapter adapter = bm != null ? bm.getAdapter() : null;
+            if (adapter == null) return "Not available";
+            if (!adapter.isEnabled()) return "Off";
+            int paired = adapter.getBondedDevices() != null ? adapter.getBondedDevices().size() : 0;
+            return paired > 0 ? "On  ·  " + paired + " paired" : "On";
+        } catch (SecurityException e) {
+            return "";
+        }
+    }
+
+    private String unitName() {
+        return weather != null && weather.fahrenheit() ? "°F  Fahrenheit" : "°C  Celsius";
+    }
+
+    /**
+     * A row of the Inputs kind with its own status line: dot lit for a good state (online, ad blocking on). With an
+     * action, OK closes the menu and runs it; without one, the caller sets the click itself.
+     */
+    private View addStatusRow(LinearLayout rows, PopupWindow popup, int iconRes, String title, String status,
+                              boolean dot, Runnable action) {
+        View row = addInputRow(rows, popup, iconRes, title, -1, action != null ? action : () -> { });
+        TextView line = row.findViewById(R.id.status);
+        line.setText(status);
+        line.setVisibility(status.isEmpty() ? View.GONE : View.VISIBLE);
+        row.findViewById(R.id.dot).setVisibility(dot ? View.VISIBLE : View.GONE);
+        return row;
     }
 
     /** The header opens launcher settings directly; hold OK keeps the extra home actions available. */

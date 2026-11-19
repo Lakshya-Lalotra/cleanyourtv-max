@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- bottom_shade: black up from the bottom edge, so the dock row sits on dark over any wallpaper. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:angle="90"
+        android:startColor="#FF000000"
+        android:centerColor="#80000000"
+        android:centerY="0.38"
+        android:endColor="#00000000" />
+</shape>

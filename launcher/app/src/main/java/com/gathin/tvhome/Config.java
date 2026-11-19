@@ -138,8 +138,6 @@ final class Config {
     final boolean backOpensClock;
     /** The ambient glow takes a new app's colour in one frame instead of dipping and fading (config.xml / theme glow_snap). */
     final boolean glowSnap;
-    /** The remote's Settings button clears the TV Settings task before opening it (config.xml / theme settings_key_clear_task). */
-    final boolean settingsKeyClearTask;
     /** App library as a round button in the top bar (config.xml library_button); needs app_library. */
     final boolean libraryButton;
     /** The App library pill after the last Home row; false hides it while libraryButton is on (show_library_pill). */
@@ -181,8 +179,6 @@ final class Config {
     final boolean gamepadPassthrough;
     /** With keyFilter on, the key services swallow Volume Up/Down and repeat a held one themselves (consume_volume_keys). */
     final boolean consumeVolumeKeys;
-    /** With keyFilter on, a volume change stops the key services filtering for a few seconds (volume_pauses_filter). */
-    final boolean volumePausesFilter;
     /** Channel Up/Down do nothing while Home is in front, instead of opening the TV's Live TV app. */
     final boolean homeIgnoreChannelKeys;
     /** Stock launcher whose home screen is sent back here if the firmware revives it (config.xml stock_home_redirect). */
@@ -252,12 +248,12 @@ final class Config {
     final int cinematicScrim;
     /** A rotating collection's groups by time of day, as file names (config.xml, wallpaper_moods); empty rotates through all of it. */
     final Map<String, Set<String>> wallpaperMoods;
-    /** Shape of the glow behind the focused app (config.xml, glow_style): {@link #GLOW_RADIAL} or {@link #GLOW_HORIZON}. */
+    /** Shape of the glow behind the focused app (config.xml, glow_style): {@link #GLOW_RADIAL}, {@link #GLOW_HORIZON} or {@link #GLOW_DOCK}. */
     final String glowStyle;
     /** The focus highlight's look (config.xml, glass_style): {@link #GLASS_DEFAULT}, {@link #GLASS_RIM} or {@link #GLASS_HALO}. */
     final String glassStyle;
 
-    static final String GLOW_RADIAL = "radial", GLOW_HORIZON = "horizon";
+    static final String GLOW_RADIAL = "radial", GLOW_HORIZON = "horizon", GLOW_DOCK = "dock";
     static final String GLASS_DEFAULT = "glass", GLASS_RIM = "rim", GLASS_HALO = "halo";
     /** Show each rotating wallpaper's name from wallpapers/captions.txt (config.xml / theme wallpaper_captions). */
     final boolean wallpaperCaptions;
@@ -297,9 +293,8 @@ final class Config {
                    List<RaceWeekend.Race> raceCalendar, boolean cinematicHome, boolean ambientGlow, boolean appGlow, boolean fadeRows, int homeIdleClockMinutes,
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
-                   Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean volumePausesFilter, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
-                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap,
-                   boolean settingsKeyClearTask) {
+                   Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean homeIgnoreChannelKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly, boolean inputsCecStateOnly,
+                   int openOnStartNetworkWait, boolean openOnStartOnWake, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock, boolean glowSnap) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -351,7 +346,6 @@ final class Config {
         this.iconOnlyVpn = iconOnlyVpn;
         this.backOpensClock = backOpensClock;
         this.glowSnap = glowSnap;
-        this.settingsKeyClearTask = settingsKeyClearTask;
         this.libraryButton = libraryButton;
         this.showLibraryPill = showLibraryPill;
         this.wifiLabelWidth = wifiLabelWidth;
@@ -397,7 +391,6 @@ final class Config {
         this.wallpaperMoods = wallpaperMoods;
         this.gamepadPassthrough = gamepadPassthrough;
         this.consumeVolumeKeys = consumeVolumeKeys;
-        this.volumePausesFilter = volumePausesFilter;
         this.homeIgnoreChannelKeys = homeIgnoreChannelKeys;
         this.powerOnHome = powerOnHome;
         this.homeLongPressHome = homeLongPressHome;
@@ -423,7 +416,9 @@ final class Config {
 
     /** A known glow_style, or radial (the default) for anything else. */
     static String glowStyle(String value) {
-        return value != null && GLOW_HORIZON.equalsIgnoreCase(value.trim()) ? GLOW_HORIZON : GLOW_RADIAL;
+        if (value == null) return GLOW_RADIAL;
+        if (GLOW_HORIZON.equalsIgnoreCase(value.trim())) return GLOW_HORIZON;
+        return GLOW_DOCK.equalsIgnoreCase(value.trim()) ? GLOW_DOCK : GLOW_RADIAL;
     }
 
     /** A known glass_style, or glass (the default) for anything else. */
@@ -485,7 +480,6 @@ final class Config {
         boolean iconOnlyVpn = res.getBoolean(R.bool.icon_only_vpn);
         boolean backOpensClock = res.getBoolean(R.bool.back_opens_clock);
         boolean glowSnap = res.getBoolean(R.bool.glow_snap);
-        boolean settingsKeyClearTask = res.getBoolean(R.bool.settings_key_clear_task);
         boolean libraryButton = res.getBoolean(R.bool.library_button);
         boolean showLibraryPill = res.getBoolean(R.bool.show_library_pill);
         int wifiLabelWidth = res.getInteger(R.integer.wifi_label_width);
@@ -519,7 +513,6 @@ final class Config {
         boolean keyFilter = res.getBoolean(R.bool.key_filter);
         boolean gamepadPassthrough = res.getBoolean(R.bool.gamepad_passthrough);
         boolean consumeVolumeKeys = res.getBoolean(R.bool.consume_volume_keys);
-        boolean volumePausesFilter = res.getBoolean(R.bool.volume_pauses_filter);
         boolean homeIgnoreChannelKeys = res.getBoolean(R.bool.home_ignore_channel_keys);
         boolean powerOnHome = res.getBoolean(R.bool.power_on_home);
         boolean homeLongPressHome = res.getBoolean(R.bool.home_long_press_home);
@@ -602,7 +595,6 @@ final class Config {
             iconOnlyVpn = bool(json, "icon_only_vpn", iconOnlyVpn);
             backOpensClock = bool(json, "back_opens_clock", backOpensClock);
             glowSnap = bool(json, "glow_snap", glowSnap);
-            settingsKeyClearTask = bool(json, "settings_key_clear_task", settingsKeyClearTask);
             libraryButton = bool(json, "library_button", libraryButton);
             showLibraryPill = bool(json, "show_library_pill", showLibraryPill);
             wifiLabelWidth = integer(json, "wifi_label_width", wifiLabelWidth, 0, 300);
@@ -636,7 +628,6 @@ final class Config {
             keyFilter = bool(json, "key_filter", keyFilter);
             gamepadPassthrough = bool(json, "gamepad_passthrough", gamepadPassthrough);
             consumeVolumeKeys = bool(json, "consume_volume_keys", consumeVolumeKeys);
-            volumePausesFilter = bool(json, "volume_pauses_filter", volumePausesFilter);
             homeIgnoreChannelKeys = bool(json, "home_ignore_channel_keys", homeIgnoreChannelKeys);
             powerOnHome = bool(json, "power_on_home", powerOnHome);
             homeLongPressHome = bool(json, "home_long_press_home", homeLongPressHome);
@@ -728,11 +719,10 @@ final class Config {
                 json == null ? Collections.emptyList() : raceCalendar(json), cinematic, ambientGlow, appGlow, fadeRows,
                 Math.max(0, idleClockMinutes), keyFilter, dockGlass, glowStyle, wallpaperCaptions, handleViewInputs, tileMenu, dockEvenPadding,
                 dockBand, cinematicDots, cinematicWhiteFocus, wifiStatusColor, cinematicScrim, cinematicArt, wallpaperMoods, gamepadPassthrough,
-                consumeVolumeKeys, volumePausesFilter, homeIgnoreChannelKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
+                consumeVolumeKeys, homeIgnoreChannelKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly, inputsCecStateOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap,
-                settingsKeyClearTask);
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), openOnStartOnWake, iconOnlyVpn, clockFormat, backOpensClock, glowSnap);
     }
 
     /**

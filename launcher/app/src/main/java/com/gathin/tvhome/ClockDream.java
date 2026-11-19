@@ -11,11 +11,6 @@ public class ClockDream extends DreamService {
     private ClockScene scene;
 
     @Override
-    protected void attachBaseContext(android.content.Context base) {
-        super.attachBaseContext(LauncherLocale.wrap(base));   // the theme's locale, as ClockActivity
-    }
-
-    @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
         setInteractive(false);   // any key wakes the TV back to where it was

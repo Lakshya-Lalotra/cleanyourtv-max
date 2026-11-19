@@ -23,6 +23,26 @@
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
+    <!-- scroll_dim: plain black over the wallpaper, more of it the further the grid is scrolled down. -->
+    <View
+        android:id="@+id/scrollDim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:alpha="0"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
+    <!-- bottom_shade: black up from the bottom edge, under the dock row (strength set in code). -->
+    <View
+        android:id="@+id/bottomShade"
+        android:layout_width="match_parent"
+        android:layout_height="420dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bottom_shade"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
     <!-- Ambient glow in the colour of the focused dock app. -->
     <View
         android:id="@+id/ambient"
@@ -215,7 +235,6 @@
                         android:textSize="52sp"
                         android:fontFamily="@string/font_light"
                         android:letterSpacing="-0.04"
-                        android:fontFeatureSettings="tnum"
                         android:includeFontPadding="false" />
 
                     <TextClock
@@ -232,6 +251,95 @@
                         android:fontFamily="@string/font_medium"
                         android:letterSpacing="0.08"
                         android:textAllCaps="true" />
+
+                    <!-- weather: an outline icon, the temperature and the air quality, shown once Open-Meteo has
+                         answered. Focusable from the top bar (Left from its first button); OK opens WeatherPanel. -->
+                    <LinearLayout
+                        android:id="@+id/weather"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom"
+                        android:layout_marginStart="10dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="14dp"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="7dp"
+                        android:orientation="vertical"
+                        android:background="@drawable/weather_bg"
+                        android:focusable="true"
+                        android:clickable="true"
+                        android:contentDescription="@string/weather"
+                        android:visibility="gone">
+
+                        <!-- The place, in small capitals over the temperature (weather_place, or the one picked). -->
+                        <TextView
+                            android:id="@+id/weatherPlace"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="2dp"
+                            android:layout_marginBottom="4dp"
+                            android:singleLine="true"
+                            android:ellipsize="end"
+                            android:maxWidth="260dp"
+                            android:textColor="@drawable/pill_text_mid"
+                            android:duplicateParentState="true"
+                            android:textSize="11sp"
+                            android:fontFamily="@string/font_medium"
+                            android:letterSpacing="0.16"
+                            android:textAllCaps="true"
+                            android:includeFontPadding="false"
+                            android:visibility="gone" />
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:duplicateParentState="true">
+
+                        <ImageView
+                            android:id="@+id/weatherIcon"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:tint="@drawable/pill_text"
+                            android:duplicateParentState="true"
+                            android:contentDescription="@null" />
+
+                        <TextView
+                            android:id="@+id/weatherTemp"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:singleLine="true"
+                            android:textColor="@drawable/pill_text"
+                            android:duplicateParentState="true"
+                            android:textSize="22sp"
+                            android:fontFamily="@string/font_light"
+                            android:includeFontPadding="false" />
+
+                        <!-- The air quality: its band's colour and the US AQI. -->
+                        <View
+                            android:id="@+id/weatherAqiDot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:layout_marginStart="16dp"
+                            android:background="@drawable/status_dot"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/weatherAqi"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="7dp"
+                            android:singleLine="true"
+                            android:textColor="@drawable/pill_text"
+                            android:duplicateParentState="true"
+                            android:textSize="15sp"
+                            android:fontFamily="@string/font_regular"
+                            android:includeFontPadding="false"
+                            android:visibility="gone" />
+                        </LinearLayout>
+                    </LinearLayout>
 
                     <View
                         android:id="@+id/clockDivider"
@@ -332,6 +440,15 @@
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal">
+
+                <!-- search (config.xml): where a film or series streams, Home's own search (SearchPanel). -->
+                <TextView
+                    android:id="@+id/btnSearch"
+                    style="@style/TopButton"
+                    android:visibility="gone"
+                    android:text="@string/search"
+                    android:drawableStart="@drawable/ic_search"
+                    android:nextFocusDown="@+id/grid" />
 
                 <TextView
                     android:id="@+id/btnInputs"

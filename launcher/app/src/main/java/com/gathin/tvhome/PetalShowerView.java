@@ -70,7 +70,7 @@ public final class PetalShowerView extends View {
         vein.setStyle(Paint.Style.STROKE);
         vein.setStrokeWidth(0.035f);
         vein.setStrokeCap(Paint.Cap.ROUND);
-        vein.setColor(EDGE);
+        vein.setColor(EDGE); 
     }
 
     /**

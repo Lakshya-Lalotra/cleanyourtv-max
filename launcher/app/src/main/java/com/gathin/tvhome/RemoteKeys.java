@@ -129,9 +129,8 @@ final class RemoteKeys {
     /**
      * scancode -> package, from the "scan:490:com.wbd.hbomax" entries of the same list. For remotes that send
      * several app buttons as one keycode and tell them apart by scancode (Sony BRAVIA: YouTube, Prime Video and
-     * Disney+ are all keycode 196, scancodes 485, 490 and 491). Find it with `getevent -t` while pressing the
-     * button: the EV_KEY code, the hex number after 0001 on its line, which this list takes in decimal (01ea is 490).
-     * Other entries are skipped; for a scancode listed twice the last entry wins.
+     * Disney+ are all keycode 196, scancodes 485, 490 and 491). Find it with `getevent -lt` while pressing the
+     * button: the EV_KEY code, in hex. Other entries are skipped; for a scancode listed twice the last entry wins.
      */
     static Map<Integer, String> parseAppScancodes(Iterable<String> entries) {
         Map<Integer, String> keys = new HashMap<>();
@@ -178,14 +177,6 @@ final class RemoteKeys {
         if (target == null || front == null || front.isEmpty()) return false;
         int slash = target.indexOf('/');
         return (slash < 0 ? target : target.substring(0, slash)).equals(front);
-    }
-
-    /** The app in front, from HomeKeyService's window changes while app_keys has "front:" entries; "" otherwise. */
-    static String frontPackage = "";
-
-    /** A tap's target for both helpers: its "front:" entry while the button's own app is in front, else the usual one. */
-    static String tap(String target, String alt) {
-        return alt != null && inFront(target, frontPackage) ? alt : target;
     }
 
     /** Created on first use: building a Handler while the class loads breaks the JVM tests. */
@@ -369,11 +360,7 @@ final class RemoteKeys {
         if (!isAction(target)) return false;
         int global = globalAction(target, Build.VERSION.SDK_INT);
         if (global != 0) {
-            // Home's own fallback path (vendor keys only the focused window gets) has no global actions: a bound helper
-            // performs them, so back, home, recents and sleep mapped to such a key are not swallowed.
-            AccessibilityService service = ctx instanceof AccessibilityService ? (AccessibilityService) ctx
-                    : HomeKeyService.running != null ? HomeKeyService.running : InputKeyService.running;
-            if (service != null) service.performGlobalAction(global);
+            if (ctx instanceof AccessibilityService) ((AccessibilityService) ctx).performGlobalAction(global);
             return true;
         }
         switch (target) {
@@ -464,7 +451,7 @@ final class RemoteKeys {
             }
             try {
                 ctx.startActivity(view);
-            } catch (ActivityNotFoundException | SecurityException ignored) {
+            } catch (ActivityNotFoundException ignored) {
             }
             return;
         }
@@ -481,7 +468,7 @@ final class RemoteKeys {
         if (open == null) return;
         try {
             ctx.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        } catch (ActivityNotFoundException | SecurityException ignored) {
+        } catch (ActivityNotFoundException ignored) {
         }
     }
 }

@@ -80,6 +80,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int ambient;
         /** uniform_tiles card fill, top and bottom colour; null until sampled from the icon. */
         int[] backdrop;
+        /** app_logos: the banner is a bare white logo that floats on the wallpaper, with no card behind it. */
+        boolean logo;
 
         Entry(String label, ComponentName component, Drawable banner, Drawable icon) {
             this(APP, label, component, banner, icon, null, 0);
@@ -220,6 +222,15 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final boolean uniformTiles;
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
+    /** Package to its bundled logo_* drawable, drawn bare instead of the banner (config.xml app_logos). */
+    private final Map<String, String> appLogos;
+    /** Package to its glow colour, instead of one sampled from the artwork (config.xml app_colors). */
+    private final Map<String, Integer> appColors = new HashMap<>();
+    /** arc_rows: the rows under the dock spread edge to edge on a shallow arc this high, in px (ArcRow). */
+    private final boolean arcRows;
+    private final float arcHeightPx;
+    /** One grid column's width, known once the first tile is created; the arc is drawn in these. */
+    private float cellWidth;
     private final List<Entry> items = new ArrayList<>();
 
     AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
@@ -244,6 +255,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.cinematic = cfg.cinematicHome;
         this.launchActions = cfg.launchActions;
         this.iconTiles = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.icon_tiles)));
+        this.appLogos = Config.packageMap(Arrays.asList(ctx.getResources().getStringArray(R.array.app_logos)));
+        this.arcRows = ctx.getResources().getBoolean(R.bool.arc_rows);
+        this.arcHeightPx = ctx.getResources().getInteger(R.integer.arc_height) * ctx.getResources().getDisplayMetrics().density;
+        for (Map.Entry<String, String> c : Config.packageMap(
+                Arrays.asList(ctx.getResources().getStringArray(R.array.app_colors))).entrySet()) {
+            try {
+                appColors.put(c.getKey(), 0xFF000000 | Color.parseColor(c.getValue()));
+            } catch (IllegalArgumentException ignored) {
+                // not a colour: the glow is sampled from the artwork as before
+            }
+        }
         this.tileMenu = cfg.tileMenu;
         this.appLabels = cfg.appLabels;
         this.appBanners = cfg.appBanners;
@@ -296,9 +318,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String label = card != null ? card.label : Cards.cleanLabel(
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
-            Drawable banner = null;
+            Drawable banner = card == null ? bundledLogo(appLogos.get(pkg)) : null;
+            boolean logo = banner != null;
             // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
-            if (!(uniformTiles && card == null)) {
+            if (!logo && !(uniformTiles && card == null)) {
                 banner = bundledBanner(appBanners.get(pkg));
                 if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
             }
@@ -308,7 +331,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (card != null) {
                 fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent));
             } else {
-                fresh.add(new Entry(label, component, banner, icon));
+                Entry entry = new Entry(label, component, banner, icon);
+                entry.logo = logo;
+                fresh.add(entry);
             }
         }
         Collections.sort(fresh, (a, b) -> {
@@ -354,6 +379,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         icon.setBounds((w - side) / 2, (h - side) / 2, (w + side) / 2, (h + side) / 2);
         icon.draw(canvas);
         return new android.graphics.drawable.BitmapDrawable(ctx.getResources(), bmp);
+    }
+
+    /** A logo_* drawable bundled with the launcher (app_logos), or null for none or a name that is not one. */
+    private Drawable bundledLogo(String name) {
+        if (name == null || !name.startsWith("logo_")) return null;
+        int id = ctx.getResources().getIdentifier(name, "drawable", ctx.getPackageName());
+        return id != 0 ? ctx.getDrawable(id) : null;
     }
 
     /** A banner_* drawable bundled with the launcher, or null for none or a name that is not one. */
@@ -416,6 +448,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+        if (inner > 0) cellWidth = inner / (float) dockSize;
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
@@ -461,6 +494,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (isLibraryAt(position)) return;
         Holder h = (Holder) holder;
         Entry e = items.get(position);
+        placeOnArc(h.itemView, position);
         if (e.kind == Entry.EMPTY) {
             // A free dock slot keeps its place in the row and the band, but shows nothing and takes no focus.
             h.card.setVisibility(View.INVISIBLE);
@@ -478,7 +512,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
         // In a single row every tile is the dock's kind: the big title above names it.
         boolean dockKind = DockSlots.inDockRow(dockRow, singleRow, position, dockSize);
-        h.name.setVisibility(dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
+        // A bare logo is its own label: no name under it, in the dock or in the rows below.
+        h.name.setVisibility(e.logo || dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
         h.inDock = dockKind;
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
         h.name.setAlpha(focused ? 1f : restNameAlpha);
@@ -495,8 +530,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
             h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
         }
+        // A logo is drawn whole on its transparent canvas (the canvas has the tile's shape, so nothing stretches);
+        // a recycled holder takes the banner's crop back.
+        if (e.logo) h.card.setBackground(null);
+        h.banner.setScaleType(e.logo ? ImageView.ScaleType.FIT_CENTER : ImageView.ScaleType.CENTER_CROP);
         if (e.banner != null) {
-            h.icon.setImageDrawable(null);
             h.banner.setImageDrawable(e.banner);
             h.banner.setVisibility(View.VISIBLE);
             h.icon.setVisibility(View.GONE);
@@ -524,6 +562,26 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             }
             return true;
         });
+    }
+
+    /**
+     * arc_rows: where a tile under the dock is drawn, moved from its grid cell by a translation. Every bind sets it, so
+     * a row that gains or loses a tile (reload rebinds them all) spreads out again; the dock row stays as laid out.
+     */
+    private void placeOnArc(View item, int position) {
+        if (!arcRows || !dockRow || singleRow || position < dockSize || cellWidth <= 0f) {
+            item.setTranslationX(0f);
+            item.setTranslationY(0f);
+            return;
+        }
+        float column = ArcRow.visualColumn(position, items.size(), dockSize);
+        item.setTranslationX((column - position % dockSize) * cellWidth);
+        item.setTranslationY(-arcHeightPx * ArcRow.lift(column, dockSize));
+    }
+
+    /** arc_rows is on for the rows under the dock (MainActivity moves Up and Down by where tiles are drawn). */
+    boolean arcRows() {
+        return arcRows && dockRow && !singleRow;
     }
 
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
@@ -669,6 +727,11 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         return position >= 0 && position < items.size() ? items.get(position).pkg : null;
     }
 
+    /** A bare logo tile (app_logos): no glass highlight is drawn behind it. */
+    boolean isLogoAt(int position) {
+        return position >= 0 && position < items.size() && items.get(position).logo;
+    }
+
     /** The tile's artwork, its banner or else its icon, for the cinematic shelf's backdrop (HeroArt). */
     Drawable artworkAt(int position) {
         if (position < 0 || position >= items.size()) return null;
@@ -684,6 +747,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     int ambientColorAt(int position) {
         if (position < 0 || position >= items.size()) return 0xFF444444;
         Entry e = items.get(position);
+        Integer brand = appColors.get(e.pkg);
+        if (brand != null) return brand;
         if (e.ambient == 0) {
             e.ambient = uniformTiles && e.banner == null ? dominantColor(e.icon) : vividColor(e.banner != null ? e.banner : e.icon);
         }

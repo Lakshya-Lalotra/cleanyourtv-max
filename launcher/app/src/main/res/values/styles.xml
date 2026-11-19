@@ -6,6 +6,26 @@
         <item name="android:windowAnimationStyle">@null</item>
     </style>
 
+    <!-- The Marvel world: starts on the same colour the wheel's disc fills the screen with, so the two meet with no seam. -->
+    <style name="Theme.TvHome.Marvel">
+        <item name="android:windowBackground">@color/marvel_red</item>
+        <item name="android:colorBackground">@color/marvel_red</item>
+        <!-- No blank starting window: the grown disc stays up until this screen's first frame, with the name in place. -->
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
+    <!-- The Wizarding World: starts on the gold the wheel's disc fills the screen with. -->
+    <style name="Theme.TvHome.Wizard" parent="Theme.TvHome.Marvel">
+        <item name="android:windowBackground">@color/wizard_gold</item>
+        <item name="android:colorBackground">@color/wizard_gold</item>
+    </style>
+
+    <!-- Middle-earth: starts on the green the wheel's disc fills the screen with, and goes dark from there. -->
+    <style name="Theme.TvHome.MiddleEarth" parent="Theme.TvHome.Marvel">
+        <item name="android:windowBackground">@color/middleearth_green</item>
+        <item name="android:colorBackground">@color/middleearth_green</item>
+    </style>
+
     <!-- Frosted pill, tvOS style. -->
     <style name="TopButtonBase">
         <item name="android:layout_width">wrap_content</item>
