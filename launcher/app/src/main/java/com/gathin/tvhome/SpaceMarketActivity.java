@@ -13,11 +13,9 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.AbsListView;
-import android.widget.BaseAdapter;
 import android.widget.EditText;
-import android.widget.GridView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,19 +32,19 @@ import java.util.Locale;
  * separate web app; until then only spaces added here are listed. The launcher has no network access.
  *
  * Sizes are written for a 1280 px wide screen and scaled to the TV's real width, so the layout matches the design.
+ * The cards are plain focusable views in rows of three, so the remote moves between them like any other button.
  */
 public final class SpaceMarketActivity extends Activity {
     private static final String PREFS = "fun_spaces", KEY = "spaces";
     private static final int MAX_FIELD = 200;
     private static final int DESIGN_WIDTH = 1280;
+    private static final int COLUMNS = 3;
     private static final int[] ACCENTS = {0xFFE50914, 0xFFFFB020, 0xFF3B82F6, 0xFF22C55E, 0xFFA855F7, 0xFF14B8A6};
 
     /** Every saved space, as {name, link}. */
     private final List<String[]> spaces = new ArrayList<>();
-    /** The spaces the search box lets through. */
-    private final List<String[]> shown = new ArrayList<>();
-    private SpaceAdapter adapter;
-    private GridView grid;
+    private ScrollView scroll;
+    private LinearLayout rows;
     private LinearLayout emptyBlock;
     private float scale;
     private Typeface medium, regular;
@@ -72,8 +70,10 @@ public final class SpaceMarketActivity extends Activity {
         TextView add = text("+  Add a space", 24, medium, 0xFFFFFFFF);
         add.setGravity(Gravity.CENTER);
         add.setPadding(u(32), u(18), u(32), u(18));
-        add.setBackground(fill(0xFFE50914, u(40)));
+        GradientDrawable addBackground = fill(0xFFE50914, u(40));
+        add.setBackground(addBackground);
         add.setFocusable(true);
+        add.setOnFocusChangeListener((view, focused) -> focusRing(addBackground, focused));
         add.setOnClickListener(v -> showAddDialog());
         header.addView(add, wrap());
         root.addView(header, matchWrap());
@@ -86,7 +86,10 @@ public final class SpaceMarketActivity extends Activity {
         search.setTextSize(TypedValue.COMPLEX_UNIT_PX, 24 * scale);
         search.setSingleLine(true);
         search.setPadding(u(32), u(20), u(32), u(20));
-        search.setBackground(fill(0xFF15151B, u(36), 0xFF2A2A33, u(2)));
+        GradientDrawable searchBackground = fill(0xFF15151B, u(36), 0xFF2A2A33, u(2));
+        search.setBackground(searchBackground);
+        search.setOnFocusChangeListener((view, focused) ->
+                searchBackground.setStroke(focused ? u(4) : u(2), focused ? 0xFFFFFFFF : 0xFF2A2A33));
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) { filter(s.toString()); }
@@ -96,17 +99,13 @@ public final class SpaceMarketActivity extends Activity {
         searchParams.topMargin = u(24);
         root.addView(search, searchParams);
 
-        grid = new GridView(this);
-        grid.setNumColumns(3);
-        grid.setVerticalSpacing(u(24));
-        grid.setHorizontalSpacing(u(24));
-        grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        grid.setVerticalScrollBarEnabled(false);
-        adapter = new SpaceAdapter();
-        grid.setAdapter(adapter);
-        LinearLayout.LayoutParams gridParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        gridParams.topMargin = u(24);
-        root.addView(grid, gridParams);
+        scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        rows = column();
+        scroll.addView(rows, matchWrap());
+        LinearLayout.LayoutParams listParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        listParams.topMargin = u(24);
+        root.addView(scroll, listParams);
 
         emptyBlock = column();
         emptyBlock.setGravity(Gravity.CENTER);
@@ -114,7 +113,9 @@ public final class SpaceMarketActivity extends Activity {
         LinearLayout.LayoutParams emptyLine = wrap();
         emptyLine.topMargin = u(16);
         emptyBlock.addView(text("Press OK on Add a space to add your first one", 22, regular, 0xFF9A9AA3), emptyLine);
-        root.addView(emptyBlock, gridParams);
+        LinearLayout.LayoutParams emptyParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        emptyParams.topMargin = u(24);
+        root.addView(emptyBlock, emptyParams);
 
         TextView footer = text("OK  open     Back  close", 18, regular, 0xFF6F6F7A);
         LinearLayout.LayoutParams footerParams = wrap();
@@ -160,20 +161,66 @@ public final class SpaceMarketActivity extends Activity {
                 .show();
     }
 
-    /** Shows the saved spaces whose name or link contains the text, ignoring case. */
+    /** Shows the saved spaces whose name or link contains the text, ignoring case, in rows of three cards. */
     private void filter(String text) {
         String needle = text.trim().toLowerCase(Locale.ROOT);
-        shown.clear();
+        List<String[]> shown = new ArrayList<>();
         for (String[] space : spaces) {
             if (needle.isEmpty() || space[0].toLowerCase(Locale.ROOT).contains(needle)
                     || space[1].toLowerCase(Locale.ROOT).contains(needle)) {
                 shown.add(space);
             }
         }
+
+        rows.removeAllViews();
+        for (int start = 0; start < shown.size(); start += COLUMNS) {
+            LinearLayout line = row();
+            for (int column = 0; column < COLUMNS; column++) {
+                int index = start + column;
+                View slot = index < shown.size() ? card(shown.get(index)) : new View(this);
+                LinearLayout.LayoutParams slotParams = new LinearLayout.LayoutParams(0, u(168), 1f);
+                if (column > 0) slotParams.leftMargin = u(24);
+                line.addView(slot, slotParams);
+            }
+            LinearLayout.LayoutParams lineParams = matchWrap();
+            if (start > 0) lineParams.topMargin = u(24);
+            rows.addView(line, lineParams);
+        }
+
         boolean none = spaces.isEmpty();
         emptyBlock.setVisibility(none ? View.VISIBLE : View.GONE);
-        grid.setVisibility(none ? View.GONE : View.VISIBLE);
-        if (adapter != null) adapter.notifyDataSetChanged();
+        scroll.setVisibility(none ? View.GONE : View.VISIBLE);
+    }
+
+    /** One space card: rounded dark tile, accent strip, name, link and a tag. Focus shows a white ring. */
+    private View card(String[] space) {
+        int accent = ACCENTS[Math.abs(space[0].hashCode()) % ACCENTS.length];
+        LinearLayout card = row();
+        GradientDrawable background = fill(0xFF17171D, u(24));
+        card.setBackground(background);
+        // The accent strip is square; clipping to the rounded background keeps it inside the corners.
+        card.setClipToOutline(true);
+        // The ring is drawn in front of the strip and text, so the strip can't cover its left side.
+        GradientDrawable ring = fill(0x00000000, u(24));
+        card.setForeground(ring);
+        card.setFocusable(true);
+        card.setOnFocusChangeListener((view, focused) -> focusRing(ring, focused));
+
+        View strip = new View(this);
+        strip.setBackgroundColor(accent);
+        card.addView(strip, new LinearLayout.LayoutParams(u(8), ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout content = column();
+        content.setPadding(u(28), u(26), u(24), u(24));
+        content.addView(text(space[0], 28, medium, 0xFFFFFFFF), wrap());
+        LinearLayout.LayoutParams linkParams = wrap();
+        linkParams.topMargin = u(8);
+        content.addView(text(space[1], 18, regular, 0xFF8A8A95), linkParams);
+        LinearLayout.LayoutParams tagParams = wrap();
+        tagParams.topMargin = u(8);
+        content.addView(text("Added on this TV", 16, medium, accent), tagParams);
+        card.addView(content, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        return card;
     }
 
     private void load() {
@@ -202,44 +249,9 @@ public final class SpaceMarketActivity extends Activity {
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, array.toString()).apply();
     }
 
-    /** One space card: rounded dark tile, accent strip, name, link and a tag. Focus shows a white ring. */
-    private final class SpaceAdapter extends BaseAdapter {
-        @Override public int getCount() { return shown.size(); }
-        @Override public Object getItem(int position) { return shown.get(position); }
-        @Override public long getItemId(int position) { return position; }
-
-        @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
-            String[] space = shown.get(position);
-            int accent = ACCENTS[Math.abs(space[0].hashCode()) % ACCENTS.length];
-
-            LinearLayout card = row();
-            GradientDrawable background = fill(0xFF17171D, u(24));
-            card.setBackground(background);
-            card.setFocusable(true);
-            card.setOnFocusChangeListener((view, focused) -> {
-                background.setStroke(focused ? u(4) : 0, 0xFFFFFFFF);
-                view.setScaleX(focused ? 1.04f : 1f);
-                view.setScaleY(focused ? 1.04f : 1f);
-            });
-            card.setLayoutParams(new AbsListView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, u(168)));
-
-            View strip = new View(SpaceMarketActivity.this);
-            strip.setBackgroundColor(accent);
-            card.addView(strip, new LinearLayout.LayoutParams(u(8), ViewGroup.LayoutParams.MATCH_PARENT));
-
-            LinearLayout content = column();
-            content.setPadding(u(28), u(26), u(24), u(24));
-            content.addView(text(space[0], 28, medium, 0xFFFFFFFF), wrap());
-            LinearLayout.LayoutParams linkParams = wrap();
-            linkParams.topMargin = u(8);
-            content.addView(text(space[1], 18, regular, 0xFF8A8A95), linkParams);
-            LinearLayout.LayoutParams tagParams = wrap();
-            tagParams.topMargin = u(8);
-            content.addView(text("Added on this TV", 16, medium, accent), tagParams);
-            card.addView(content, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
-            return card;
-        }
+    /** The focused card or button gets a white ring, so the remote's position is clear from across the room. */
+    private void focusRing(GradientDrawable background, boolean focused) {
+        background.setStroke(focused ? u(4) : 0, 0xFFFFFFFF);
     }
 
     private int u(int designPixels) {
