@@ -83,6 +83,8 @@ public final class SpaceMarketActivity extends Activity {
 
         Button add = new Button(this);
         add.setText("Add a space");
+        add.setTextColor(Color.WHITE);
+        add.setBackgroundColor(0xFF333333);
         add.setOnClickListener(v -> showAddDialog());
         root.addView(add);
 
